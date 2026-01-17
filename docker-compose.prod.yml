@@ -1,0 +1,357 @@
+# =============================================================================
+# Docker Compose - Production Environment
+# Security-hardened with Docker secrets and network isolation
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Prerequisites:
+#   1. Create secrets directory with credential files
+#   2. Configure Azure Blob Storage for backups (optional)
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Nginx Web Server (Security Hardened)
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/nginx:latest
+    container_name: laravel-nginx
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      php-fpm:
+        condition: service_healthy
+    networks:
+      - frontend
+      - backend
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:uid=101,gid=101,mode=755
+      - /var/run:uid=101,gid=101,mode=755
+      - /var/log/nginx:uid=101,gid=101,mode=755
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # PHP-FPM Application Server (Security Hardened)
+  # ---------------------------------------------------------------------------
+  php-fpm:
+    image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/php-fpm:latest
+    container_name: laravel-php
+    restart: always
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=pgsql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=laravel
+      - REDIS_CLIENT=phpredis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CACHE_STORE=redis
+      - SESSION_DRIVER=redis
+      - QUEUE_CONNECTION=redis
+      - LOG_CHANNEL=stderr
+      - LOG_LEVEL=warning
+      - MIGRATE_ON_START=false
+    secrets:
+      - app_key
+      - db_username
+      - db_password
+      - redis_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "php-fpm-healthcheck || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database (Security Hardened)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    container_name: laravel-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: laravel
+      POSTGRES_USER_FILE: /run/secrets/db_username
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      PGDATA: /var/lib/postgresql/data/pgdata
+    secrets:
+      - db_username
+      - db_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/db_username) -d laravel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Redis Cache & Queue Backend (Security Hardened)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: laravel-redis
+    restart: always
+    command: >
+      sh -c "redis-server
+      --appendonly yes
+      --requirepass $$(cat /run/secrets/redis_password)
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --tcp-backlog 511
+      --timeout 0
+      --tcp-keepalive 300"
+    secrets:
+      - redis_password
+    volumes:
+      - redis_data:/data
+    networks:
+      - backend
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a $$(cat /run/secrets/redis_password) ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # Queue Worker (Security Hardened)
+  # ---------------------------------------------------------------------------
+  queue:
+    image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/php-fpm:latest
+    container_name: laravel-queue
+    restart: always
+    entrypoint: ["/usr/local/bin/queue-entrypoint.sh"]
+    command: php artisan queue:work redis --sleep=3 --tries=3 --max-time=3600 --memory=256
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - DB_CONNECTION=pgsql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=laravel
+      - REDIS_CLIENT=phpredis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - LOG_CHANNEL=stderr
+      - LOG_LEVEL=info
+    secrets:
+      - app_key
+      - db_username
+      - db_password
+      - redis_password
+    depends_on:
+      php-fpm:
+        condition: service_healthy
+    networks:
+      - backend
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Database Backup Service
+  # ---------------------------------------------------------------------------
+  backup:
+    image: jkaninda/pg-bkup:latest
+    container_name: laravel-backup
+    restart: always
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=laravel
+      # Backup schedule: Daily at 2:00 AM
+      - CRON_EXPRESSION=0 2 * * *
+      - BACKUP_RETENTION_DAYS=30
+      # Azure Blob Storage configuration
+      - AZURE_STORAGE_CONTAINER_NAME=${AZURE_STORAGE_CONTAINER_NAME:-backups}
+      - STORAGE_PATH=azure
+    secrets:
+      - db_username
+      - db_password
+      - azure_storage_account
+      - azure_storage_key
+    volumes:
+      - backup_data:/backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# -----------------------------------------------------------------------------
+# Networks
+# -----------------------------------------------------------------------------
+networks:
+  # Frontend network - accessible from outside
+  frontend:
+    driver: bridge
+    name: laravel-frontend-prod
+
+  # Backend network - INTERNAL ONLY (security critical!)
+  backend:
+    driver: bridge
+    internal: true
+    name: laravel-backend-prod
+
+# -----------------------------------------------------------------------------
+# Volumes - Persistent data storage
+# -----------------------------------------------------------------------------
+volumes:
+  postgres_data:
+    driver: local
+    name: laravel-postgres-data-prod
+  redis_data:
+    driver: local
+    name: laravel-redis-data-prod
+  backup_data:
+    driver: local
+    name: laravel-backup-data-prod
+
+# -----------------------------------------------------------------------------
+# Secrets - Loaded from files in ./secrets directory
+# -----------------------------------------------------------------------------
+secrets:
+  app_key:
+    file: ./secrets/app_key.txt
+  db_username:
+    file: ./secrets/db_username.txt
+  db_password:
+    file: ./secrets/db_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  azure_storage_account:
+    file: ./secrets/azure_storage_account.txt
+  azure_storage_key:
+    file: ./secrets/azure_storage_key.txt
