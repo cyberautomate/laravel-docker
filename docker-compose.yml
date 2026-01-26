@@ -13,8 +13,10 @@ services:
     restart: unless-stopped
     ports:
       - "${NGINX_PORT:-80}:80"
+      - "${NGINX_PORT_APP2:-8081}:8081"
     volumes:
       - ./src:/var/www:ro
+      - ./apps/app2:/var/www/app2:ro
       - ./docker/development/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       php-fpm:
@@ -41,6 +43,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./src:/var/www
+      - ./apps/app2:/var/www/app2
       - ./docker/development/php/php.ini:/usr/local/etc/php/conf.d/custom.ini:ro
     environment:
       - APP_ENV=${APP_ENV:-local}
@@ -77,7 +80,7 @@ services:
       start_period: 60s
 
   # ---------------------------------------------------------------------------
-  # PostgreSQL 18 Database
+  # PostgreSQL 17 Database
   # ---------------------------------------------------------------------------
   postgres:
     image: postgres:17-alpine
@@ -89,9 +92,11 @@ services:
       POSTGRES_DB: ${DB_DATABASE:-laravel}
       POSTGRES_USER: ${DB_USERNAME:-laravel}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+      POSTGRES_MULTIPLE_DATABASES: app2_db
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/scripts/postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
     networks:
       - backend
     healthcheck:
@@ -123,7 +128,7 @@ services:
       start_period: 10s
 
   # ---------------------------------------------------------------------------
-  # Queue Worker
+  # Queue Worker - Primary App (src/)
   # ---------------------------------------------------------------------------
   queue:
     build:
@@ -152,6 +157,49 @@ services:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - CACHE_STORE=redis
       - QUEUE_CONNECTION=redis
+      - LOG_CHANNEL=stack
+      - LOG_LEVEL=debug
+    depends_on:
+      php-fpm:
+        condition: service_healthy
+    networks:
+      - backend
+
+  # ---------------------------------------------------------------------------
+  # Queue Worker - Secondary App (apps/app2/)
+  # ---------------------------------------------------------------------------
+  queue-app2:
+    build:
+      context: .
+      dockerfile: docker/common/php-fpm/Dockerfile
+      target: development
+    container_name: laravel-queue-app2
+    restart: unless-stopped
+    working_dir: /var/www/app2
+    command: php artisan queue:work redis --queue=app2 --sleep=3 --tries=3 --max-time=3600 --verbose
+    volumes:
+      - ./apps/app2:/var/www/app2
+      - ./docker/development/php/php.ini:/usr/local/etc/php/conf.d/custom.ini:ro
+    environment:
+      - APP_ENV=${APP_ENV:-local}
+      - APP_DEBUG=${APP_DEBUG:-true}
+      - APP_KEY=${APP2_KEY:-}
+      - DB_CONNECTION=pgsql
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_DATABASE=app2_db
+      - DB_USERNAME=${DB_USERNAME:-laravel}
+      - DB_PASSWORD=${DB_PASSWORD:-secret}
+      - REDIS_CLIENT=phpredis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_DB=1
+      - REDIS_PREFIX=app2_
+      - CACHE_STORE=redis
+      - CACHE_PREFIX=app2_cache_
+      - QUEUE_CONNECTION=redis
+      - QUEUE_QUEUE=app2
       - LOG_CHANNEL=stack
       - LOG_LEVEL=debug
     depends_on:

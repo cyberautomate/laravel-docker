@@ -14,7 +14,8 @@
       "mcp__MCP_DOCKER__puppeteer_navigate",
       "Bash(docker ps:*)",
       "Bash(docker logs:*)",
-      "mcp__MCP_DOCKER__puppeteer_screenshot"
+      "mcp__MCP_DOCKER__puppeteer_screenshot",
+      "Bash(bash:*)"
     ]
   }
 }
