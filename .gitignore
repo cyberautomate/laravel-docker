@@ -1,0 +1,24 @@
+# Environment files (may contain secrets)
+.env
+.env.*
+!.env.example
+
+# Encrypted environment files can be committed
+!.env.encrypted
+
+# Secrets directory contents
+secrets/*
+!secrets/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

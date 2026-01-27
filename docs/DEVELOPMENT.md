@@ -54,13 +54,14 @@ cd laravel
 ### 2. Copy Environment File
 
 ```bash
-cp .env.docker .env
+cp .env.example .env
 ```
 
-Or copy from example and configure:
+Edit `.env` and set your database password and other secrets:
 
 ```bash
-cp .env.example .env
+# Generate a secure password
+openssl rand -base64 32
 ```
 
 ### 3. Start the Development Environment
@@ -97,6 +98,26 @@ docker compose exec php-fpm npm run build
 ---
 
 ## Environment Setup
+
+### Encrypting Environment Files
+
+Laravel supports encrypting `.env` files for secure storage. After configuring your `.env` with real secrets:
+
+```bash
+# Encrypt the .env file
+docker compose exec php-fpm php artisan env:encrypt
+
+# This creates .env.encrypted and outputs a decryption key
+# SAVE THE KEY SECURELY - you cannot decrypt without it!
+```
+
+To decrypt for editing:
+
+```bash
+docker compose exec php-fpm php artisan env:decrypt --key=<your-key>
+```
+
+The encrypted file (`.env.encrypted`) can be safely committed to version control. Store the decryption key in a secure location (password manager, vault, etc.).
 
 ### Environment Variables
 
