@@ -51,17 +51,27 @@ git clone https://github.com/your-org/laravel.git
 cd laravel
 ```
 
-### 2. Copy Environment File
+### 2. Copy Environment Files
+
+The project uses two environment files:
+- **Root `.env`** - Docker Compose settings (ports, credentials for containers)
+- **`src/.env`** - Laravel application configuration
 
 ```bash
+# Root level (Docker Compose)
 cp .env.example .env
+
+# Laravel application
+cp src/.env.example src/.env
 ```
 
-Edit `.env` and set your database password and other secrets:
+Generate and set a secure database password in **both** files:
 
 ```bash
-# Generate a secure password
+# Generate a password
 openssl rand -base64 32
+
+# Edit both .env files and set DB_PASSWORD to the same value
 ```
 
 ### 3. Start the Development Environment
