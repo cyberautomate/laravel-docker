@@ -61,6 +61,9 @@ FROM base AS development
 RUN pecl install xdebug \
     && docker-php-ext-enable xdebug
 
+# Install Node.js and npm for frontend build tools (Vite, etc.)
+RUN apk add --no-cache nodejs npm
+
 # Install Composer
 COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
 

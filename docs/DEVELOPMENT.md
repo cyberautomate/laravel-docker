@@ -676,6 +676,29 @@ docker compose restart postgres
 docker compose exec postgres createdb -U laravel laravel
 ```
 
+#### Password Authentication Failed
+
+If you get `FATAL: password authentication failed for user "laravel"` after changing `DB_PASSWORD`:
+
+PostgreSQL only sets the password when the volume is first created. If you started containers before setting `DB_PASSWORD`, or changed it afterward, the database retains the old credentials.
+
+**Solution** - Reset the postgres volume:
+
+```bash
+# Stop containers and remove postgres volume
+docker compose down
+docker volume rm laravel-postgres-data
+
+# Restart (postgres will initialize with current DB_PASSWORD)
+docker compose up -d
+```
+
+**Warning**: This deletes all database data. For existing databases with data you need to keep, change the password via psql instead:
+
+```bash
+docker compose exec postgres psql -U postgres -c "ALTER USER laravel PASSWORD 'your-new-password';"
+```
+
 ### Redis Issues
 
 #### Connection Refused
