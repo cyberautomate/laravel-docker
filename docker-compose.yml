@@ -41,6 +41,7 @@ services:
       target: development
     container_name: laravel-php
     restart: unless-stopped
+    working_dir: /var/www
     volumes:
       - ./src:/var/www
       - ./apps/app2:/var/www/app2
