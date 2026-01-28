@@ -71,7 +71,7 @@ laravel/
 │       ├── entrypoint/           # Container startup scripts
 │       └── backup/               # Database backup scripts
 │
-├── secrets/                      # Production secrets (git-ignored)
+├── .env.encrypted                # Encrypted environment file (can be committed)
 ├── backups/                      # Database backup storage
 ├── .github/workflows/            # CI/CD pipeline definitions
 │
@@ -390,7 +390,7 @@ Write:
 │  - Capability dropping (CAP_DROP: ALL)                          │
 │  - Read-only filesystems                                        │
 │  - Resource limits                                              │
-│  - Docker secrets for credentials                               │
+│  - Encrypted .env files for credentials                         │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -398,13 +398,12 @@ Write:
 
 **Development**: Environment variables in `.env` file
 
-**Production**: Docker secrets mounted at runtime
-- `/run/secrets/app_key`
-- `/run/secrets/db_username`
-- `/run/secrets/db_password`
-- `/run/secrets/redis_password`
-- `/run/secrets/azure_storage_account`
-- `/run/secrets/azure_storage_key`
+**Production**: Encrypted `.env` files using Laravel's built-in encryption
+- All secrets stored in `.env` file
+- Encrypted using `php artisan env:encrypt`
+- Encrypted file (`.env.encrypted`) can be safely committed to version control
+- Decrypted during deployment using `php artisan env:decrypt`
+- Encryption key stored securely in GitHub Actions secrets or vault
 
 ---
 

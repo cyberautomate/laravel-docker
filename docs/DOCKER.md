@@ -197,11 +197,8 @@ services:
     tmpfs:
       - /tmp:mode=1777,size=64M
       - /var/run:mode=1777,size=16M
-    secrets:
-      - app_key
-      - db_username
-      - db_password
-      - redis_password
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
 
   postgres:
     deploy:
@@ -209,19 +206,18 @@ services:
         limits:
           cpus: '2'
           memory: 1G
-    secrets:
-      - db_username
-      - db_password
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
 
   redis:
     command: >
       redis-server
       --appendonly yes
-      --requirepass_file /run/secrets/redis_password
+      --requirepass ${REDIS_PASSWORD}
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
-    secrets:
-      - redis_password
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
 
   backup:
     image: jkaninda/pg-bkup:latest
@@ -233,25 +229,15 @@ services:
       - BACKUP_RETENTION_DAYS=30
       - AWS_S3_ENDPOINT=${AZURE_BLOB_ENDPOINT}
       - AWS_S3_BUCKET_NAME=${AZURE_CONTAINER_NAME}
-    secrets:
-      - db_username
-      - db_password
-      - azure_storage_account
-      - azure_storage_key
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
 
-secrets:
-  app_key:
-    file: ./secrets/app_key.txt
-  db_username:
-    file: ./secrets/db_username.txt
-  db_password:
-    file: ./secrets/db_password.txt
-  redis_password:
-    file: ./secrets/redis_password.txt
-  azure_storage_account:
-    file: ./secrets/azure_storage_account.txt
-  azure_storage_key:
-    file: ./secrets/azure_storage_key.txt
+# Secrets are managed via encrypted .env files
+# See DEPLOYMENT.md for secrets management details
+#
+# In production, secrets are loaded from the .env file which is
+# decrypted during deployment using Laravel's env:decrypt command.
+# The encryption key is stored securely in GitHub Actions secrets.
 
 networks:
   backend:

@@ -106,14 +106,10 @@ D:\_repos\docker\laravel\
 │       │   └── queue-entrypoint.sh
 │       └── backup/
 │           └── backup.sh
-├── secrets/                          # Git-ignored production secrets
-│   ├── app_key.txt
-│   ├── db_username.txt
-│   ├── db_password.txt
-│   └── redis_password.txt
+├── .env.encrypted                    # Encrypted environment file (safe for version control)
 ├── backups/                          # Local backup storage
 ├── docker-compose.yml                # Local development
-├── docker-compose.prod.yml           # Production with secrets
+├── docker-compose.prod.yml           # Production configuration
 ├── .env.docker                       # Local dev environment
 ├── .env.example                      # Template
 ├── .dockerignore
@@ -425,7 +421,7 @@ volumes:
 ```yaml
 # =============================================================================
 # Docker Compose - Production Environment
-# Security-hardened with Docker secrets and network isolation
+# Security-hardened with encrypted .env files and network isolation
 # =============================================================================
 
 services:
@@ -489,11 +485,8 @@ services:
       - SESSION_DRIVER=redis
       - QUEUE_CONNECTION=redis
       - MIGRATE_ON_START=false
-    secrets:
-      - app_key
-      - db_username
-      - db_password
-      - redis_password
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
     depends_on:
       postgres:
         condition: service_healthy
@@ -537,12 +530,11 @@ services:
     container_name: laravel-postgres
     restart: always
     environment:
-      POSTGRES_DB: laravel
-      POSTGRES_USER_FILE: /run/secrets/db_username
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
-    secrets:
-      - db_username
-      - db_password
+      POSTGRES_DB: ${DB_DATABASE:-laravel}
+      POSTGRES_USER: ${DB_USERNAME:-laravel}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -558,7 +550,7 @@ services:
           cpus: '0.5'
           memory: 256M
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/db_username) -d laravel"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-laravel} -d ${DB_DATABASE:-laravel}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -576,13 +568,13 @@ services:
     container_name: laravel-redis
     restart: always
     command: >
-      sh -c "redis-server
+      redis-server
       --appendonly yes
-      --requirepass $$(cat /run/secrets/redis_password)
+      --requirepass ${REDIS_PASSWORD}
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru"
-    secrets:
-      - redis_password
+      --maxmemory-policy allkeys-lru
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
     volumes:
       - redis_data:/data
     networks:
@@ -600,7 +592,7 @@ services:
           cpus: '0.1'
           memory: 128M
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$(cat /run/secrets/redis_password) ping | grep PONG"]
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -629,11 +621,8 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - QUEUE_CONNECTION=redis
-    secrets:
-      - app_key
-      - db_username
-      - db_password
-      - redis_password
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
     depends_on:
       php-fpm:
         condition: service_healthy
@@ -671,11 +660,8 @@ services:
       - CRON_EXPRESSION=0 2 * * *
       - BACKUP_RETENTION_DAYS=30
       - AZURE_STORAGE_CONTAINER_NAME=backups
-    secrets:
-      - db_username
-      - db_password
-      - azure_storage_account
-      - azure_storage_key
+    env_file:
+      - .env    # Secrets loaded from encrypted .env file
     volumes:
       - backup_data:/backup
     depends_on:
@@ -718,21 +704,17 @@ volumes:
     driver: local
 
 # -----------------------------------------------------------------------------
-# Secrets
+# Secrets Management
 # -----------------------------------------------------------------------------
-secrets:
-  app_key:
-    file: ./secrets/app_key.txt
-  db_username:
-    file: ./secrets/db_username.txt
-  db_password:
-    file: ./secrets/db_password.txt
-  redis_password:
-    file: ./secrets/redis_password.txt
-  azure_storage_account:
-    file: ./secrets/azure_storage_account.txt
-  azure_storage_key:
-    file: ./secrets/azure_storage_key.txt
+# All secrets are stored in encrypted .env files using Laravel's built-in encryption.
+#
+# Setup:
+#   1. Configure secrets in .env file
+#   2. Encrypt: php artisan env:encrypt --env=production
+#   3. Store encryption key in GitHub Actions secrets (LARAVEL_ENV_ENCRYPTION_KEY)
+#   4. On deployment: php artisan env:decrypt --env=production --key=$LARAVEL_ENV_ENCRYPTION_KEY
+#
+# The .env.encrypted file can be safely committed to version control.
 ```
 
 ---
@@ -1195,31 +1177,14 @@ set -e
 
 # =============================================================================
 # PHP-FPM Production Entrypoint
-# Handles Docker secrets and Laravel optimization
+# Handles encrypted .env files and Laravel optimization
 # =============================================================================
 
 echo "Starting PHP-FPM entrypoint..."
 
-# Function to read secret from file
-read_secret() {
-    local secret_file="$1"
-    local env_var="$2"
-
-    if [ -f "$secret_file" ]; then
-        export "$env_var"="$(cat "$secret_file")"
-        echo "Loaded secret for $env_var"
-    fi
-}
-
-# Load secrets from Docker secrets
-if [ -d "/run/secrets" ]; then
-    echo "Loading Docker secrets..."
-
-    [ -f "/run/secrets/app_key" ] && export APP_KEY="$(cat /run/secrets/app_key)"
-    [ -f "/run/secrets/db_username" ] && export DB_USERNAME="$(cat /run/secrets/db_username)"
-    [ -f "/run/secrets/db_password" ] && export DB_PASSWORD="$(cat /run/secrets/db_password)"
-    [ -f "/run/secrets/redis_password" ] && export REDIS_PASSWORD="$(cat /run/secrets/redis_password)"
-fi
+# Secrets are loaded from the encrypted .env file which is decrypted during deployment
+# using Laravel's env:decrypt command. Environment variables are passed via Docker Compose.
+# No need to manually load secrets in the entrypoint script.
 
 # Wait for database to be ready
 if [ -n "$DB_HOST" ]; then
@@ -1274,14 +1239,8 @@ set -e
 
 echo "Starting Queue Worker entrypoint..."
 
-# Load secrets
-if [ -d "/run/secrets" ]; then
-    echo "Loading Docker secrets..."
-    [ -f "/run/secrets/app_key" ] && export APP_KEY="$(cat /run/secrets/app_key)"
-    [ -f "/run/secrets/db_username" ] && export DB_USERNAME="$(cat /run/secrets/db_username)"
-    [ -f "/run/secrets/db_password" ] && export DB_PASSWORD="$(cat /run/secrets/db_password)"
-    [ -f "/run/secrets/redis_password" ] && export REDIS_PASSWORD="$(cat /run/secrets/redis_password)"
-fi
+# Secrets are loaded from the encrypted .env file which is decrypted during deployment
+# using Laravel's env:decrypt command. Environment variables are passed via Docker Compose.
 
 # Wait for PHP-FPM to be healthy
 echo "Waiting for application to be ready..."
@@ -1312,13 +1271,9 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="laravel_${TIMESTAMP}.sql.gz"
 RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-30}
 
-# Load secrets
-if [ -f "/run/secrets/db_username" ]; then
-    DB_USER=$(cat /run/secrets/db_username)
-fi
-if [ -f "/run/secrets/db_password" ]; then
-    export PGPASSWORD=$(cat /run/secrets/db_password)
-fi
+# Secrets are loaded from environment variables (via encrypted .env file)
+DB_USER=${DB_USERNAME:-laravel}
+export PGPASSWORD=${DB_PASSWORD}
 
 echo "[$(date)] Starting PostgreSQL backup..."
 
@@ -1644,9 +1599,10 @@ jobs:
 - [ ] Cloudflare IP restoration configured
 
 ### Secrets Management
-- [ ] No secrets in environment variables in production
-- [ ] Docker secrets used for all sensitive data
-- [ ] Secrets files excluded from git (`.gitignore`)
+- [ ] All secrets stored in encrypted `.env` files
+- [ ] Environment encryption key stored securely (GitHub secrets, vault)
+- [ ] `.env` files excluded from git (`.gitignore`)
+- [ ] `.env.encrypted` can be safely committed
 - [ ] Backup encryption key stored securely
 
 ### PHP Security
@@ -1670,7 +1626,7 @@ jobs:
 - [ ] `.env` files excluded from git
 - [ ] APP_DEBUG=false in production
 - [ ] HTTPS enforced (via Cloudflare)
-- [ ] Database credentials use Docker secrets
+- [ ] Database credentials stored in encrypted `.env` file
 - [ ] Redis requires authentication in production
 
 ### Backup Security
@@ -1703,11 +1659,11 @@ jobs:
 10. Create `docker/production/nginx/Dockerfile`
 11. Create `docker/production/php/php-production.ini`
 12. Create entrypoint scripts
-13. Create `docker-compose.prod.yml` with secrets
+13. Create `docker-compose.prod.yml`
 
 ### Phase 4: Secrets and Backup
-14. Create secrets directory structure
-15. Generate production secrets
+14. Configure secrets in `.env` file
+15. Encrypt environment file using `php artisan env:encrypt`
 16. Create backup scripts
 17. Configure Azure Blob Storage connection
 
@@ -1722,7 +1678,7 @@ jobs:
 23. Install Docker and Docker Compose
 24. Configure firewall (allow ports 80, 443, 22)
 25. Set up DNS and Cloudflare proxy
-26. Deploy secrets to production server
+26. Deploy encrypted environment file to production server
 27. First deployment
 
 ---
@@ -1792,6 +1748,7 @@ az storage blob list --account-name <account> --container-name backups
 | `SSH_KNOWN_HOSTS` | SSH host verification |
 | `SERVER_HOST` | Azure VM IP address or hostname |
 | `SERVER_USER` | SSH username for deployment |
+| `LARAVEL_ENV_ENCRYPTION_KEY` | Key for decrypting `.env.encrypted` |
 | `SLACK_WEBHOOK_URL` | (Optional) Slack notification webhook |
 
 ---
@@ -1817,15 +1774,27 @@ sudo ufw allow 80/tcp
 sudo ufw allow 443/tcp
 sudo ufw enable
 
-# Create secrets directory
-mkdir -p /opt/laravel/secrets
-chmod 700 /opt/laravel/secrets
+# Set up environment configuration
+cd /opt/laravel
 
-# Generate secrets (run these and save output to secret files)
-php artisan key:generate --show > /opt/laravel/secrets/app_key.txt
-openssl rand -base64 32 > /opt/laravel/secrets/db_password.txt
-openssl rand -base64 32 > /opt/laravel/secrets/redis_password.txt
-echo "laravel" > /opt/laravel/secrets/db_username.txt
+# Create .env from template
+cp .env.example .env
+
+# Generate application key
+php artisan key:generate
+
+# Edit .env with your production secrets
+nano .env
+
+# After configuring secrets, encrypt the environment file
+php artisan env:encrypt --env=production
+
+# Store the displayed encryption key securely in GitHub Actions secrets
+# as LARAVEL_ENV_ENCRYPTION_KEY
+
+# The .env.encrypted file can be committed to version control
+# During deployment, it will be decrypted using:
+# php artisan env:decrypt --env=production --key=$LARAVEL_ENV_ENCRYPTION_KEY
 ```
 
 ---

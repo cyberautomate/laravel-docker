@@ -301,20 +301,17 @@ git clone https://github.com/your-org/laravel.git .
 ```
 /var/www/laravel/
 ├── docker-compose.prod.yml
-├── secrets/
-│   ├── app_key.txt
-│   ├── db_username.txt
-│   ├── db_password.txt
-│   ├── redis_password.txt
-│   ├── azure_storage_account.txt
-│   └── azure_storage_key.txt
+├── .env                      # Environment configuration (encrypted secrets)
+├── .env.encrypted            # Encrypted environment file (safe for version control)
 ├── backups/
-└── .env
+└── storage/
 ```
 
 ---
 
 ## Secrets Management
+
+All secrets are stored in `.env` files and encrypted using Laravel's built-in encryption.
 
 ### Required Secrets
 
@@ -327,63 +324,80 @@ git clone https://github.com/your-org/laravel.git .
 | `SERVER_HOST` | Production server IP/hostname |
 | `SERVER_USER` | SSH username |
 | `SLACK_WEBHOOK_URL` | Slack notification webhook |
+| `LARAVEL_ENV_ENCRYPTION_KEY` | Key for decrypting `.env.encrypted` |
 
 #### Production Server Secrets
 
-Create the `secrets/` directory and populate secret files:
+All secrets are stored in the `.env` file and encrypted:
 
 ```bash
-# Create secrets directory
-mkdir -p /var/www/laravel/secrets
-chmod 700 /var/www/laravel/secrets
+# Navigate to project directory
+cd /var/www/laravel
 
-# Generate secure values
-# App key (base64 encoded)
-echo "base64:$(openssl rand -base64 32)" > secrets/app_key.txt
+# Create .env from template
+cp .env.example .env
 
-# Database credentials
-echo "laravel" > secrets/db_username.txt
-openssl rand -base64 24 > secrets/db_password.txt
+# Generate application key
+php artisan key:generate
 
-# Redis password
-openssl rand -base64 24 > secrets/redis_password.txt
-
-# Azure Storage (if using backup)
-echo "your_storage_account" > secrets/azure_storage_account.txt
-echo "your_storage_key" > secrets/azure_storage_key.txt
-
-# Secure permissions
-chmod 600 /var/www/laravel/secrets/*
+# Edit .env to set all secrets
+nano .env
 ```
 
-### Secrets in Docker Compose
+Set the following values in your `.env` file:
 
-Secrets are mounted as files in `/run/secrets/`:
+```bash
+APP_KEY=base64:your-generated-key
+DB_USERNAME=laravel
+DB_PASSWORD=your-secure-database-password
+REDIS_PASSWORD=your-secure-redis-password
+AZURE_STORAGE_ACCOUNT=your_storage_account
+AZURE_STORAGE_KEY=your_storage_key
+```
+
+#### Encrypting the Environment File
+
+After configuring secrets in `.env`, encrypt it for secure storage and deployment:
+
+```bash
+# Encrypt the .env file (generates .env.encrypted)
+php artisan env:encrypt --env=production
+
+# Save the encryption key securely (displayed after encryption)
+# Store this key in GitHub Actions secrets as LARAVEL_ENV_ENCRYPTION_KEY
+```
+
+The encrypted file (`.env.encrypted`) can be safely committed to version control.
+
+#### Decrypting on Deployment
+
+During deployment, decrypt the environment file:
+
+```bash
+# Decrypt using the encryption key
+php artisan env:decrypt --env=production --key=$LARAVEL_ENV_ENCRYPTION_KEY
+```
+
+### Environment Variables in Docker Compose
+
+Secrets are passed via environment variables from the `.env` file:
 
 ```yaml
-secrets:
-  app_key:
-    file: ./secrets/app_key.txt
-  db_username:
-    file: ./secrets/db_username.txt
-  db_password:
-    file: ./secrets/db_password.txt
-
 services:
   php-fpm:
-    secrets:
-      - app_key
-      - db_username
-      - db_password
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=production
+      - APP_DEBUG=false
 ```
 
-### Reading Secrets in Entrypoint
+### Security Best Practices
 
-```bash
-if [ -f /run/secrets/app_key ]; then
-    export APP_KEY=$(cat /run/secrets/app_key)
-fi
-```
+- Never commit `.env` files to version control
+- Store the encryption key securely (password manager, vault, GitHub secrets)
+- Rotate secrets periodically
+- Use strong, randomly generated passwords
 
 ---
 
@@ -612,7 +626,7 @@ docker compose -f docker-compose.prod.yml logs postgres
 
 # Test connection manually
 docker compose -f docker-compose.prod.yml exec php-fpm \
-  php -r "new PDO('pgsql:host=postgres;port=5432;dbname=laravel', 'laravel', file_get_contents('/run/secrets/db_password'));"
+  php -r "new PDO('pgsql:host=postgres;port=5432;dbname=laravel', env('DB_USERNAME'), env('DB_PASSWORD'));"
 ```
 
 #### Redis Connection Failed

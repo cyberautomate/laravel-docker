@@ -374,19 +374,9 @@ set -e
 
 echo "Starting PHP-FPM container..."
 
-# Load secrets if available (production)
-if [ -f /run/secrets/app_key ]; then
-    export APP_KEY=$(cat /run/secrets/app_key)
-fi
-if [ -f /run/secrets/db_username ]; then
-    export DB_USERNAME=$(cat /run/secrets/db_username)
-fi
-if [ -f /run/secrets/db_password ]; then
-    export DB_PASSWORD=$(cat /run/secrets/db_password)
-fi
-if [ -f /run/secrets/redis_password ]; then
-    export REDIS_PASSWORD=$(cat /run/secrets/redis_password)
-fi
+# Secrets are loaded from the .env file which is decrypted during deployment
+# using Laravel's env:decrypt command. No need to manually load secrets here.
+# All environment variables are passed via Docker Compose env_file directive.
 
 # Wait for PostgreSQL
 echo "Waiting for PostgreSQL..."
@@ -540,13 +530,15 @@ redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
 ```bash
 redis-server \
   --appendonly yes \
-  --requirepass $(cat /run/secrets/redis_password) \
+  --requirepass ${REDIS_PASSWORD} \
   --maxmemory 256mb \
   --maxmemory-policy allkeys-lru \
   --tcp-backlog 511 \
   --timeout 0 \
   --tcp-keepalive 300
 ```
+
+Note: `REDIS_PASSWORD` is loaded from the encrypted `.env` file and passed via Docker Compose environment.
 
 ### Configuration Options
 
@@ -683,19 +675,9 @@ set -e
 
 echo "Starting Queue Worker container..."
 
-# Load secrets if available
-if [ -f /run/secrets/app_key ]; then
-    export APP_KEY=$(cat /run/secrets/app_key)
-fi
-if [ -f /run/secrets/db_username ]; then
-    export DB_USERNAME=$(cat /run/secrets/db_username)
-fi
-if [ -f /run/secrets/db_password ]; then
-    export DB_PASSWORD=$(cat /run/secrets/db_password)
-fi
-if [ -f /run/secrets/redis_password ]; then
-    export REDIS_PASSWORD=$(cat /run/secrets/redis_password)
-fi
+# Secrets are loaded from the .env file which is decrypted during deployment
+# using Laravel's env:decrypt command. No need to manually load secrets here.
+# All environment variables are passed via Docker Compose env_file directive.
 
 # Wait for Redis (required for queue)
 echo "Waiting for Redis..."
@@ -799,11 +781,8 @@ backup:
     - AWS_S3_BUCKET_NAME=${AZURE_CONTAINER_NAME}
   volumes:
     - backup_data:/backup
-  secrets:
-    - db_username
-    - db_password
-    - azure_storage_account
-    - azure_storage_key
+  env_file:
+    - .env    # Secrets loaded from encrypted .env file
   networks:
     - backend
   depends_on:
