@@ -86,8 +86,16 @@ docker compose up -d
 # Install Composer dependencies
 docker compose exec php-fpm composer install
 
-# Generate application key
+# Generate application key (writes to src/.env)
 docker compose exec php-fpm php artisan key:generate
+
+# IMPORTANT: Copy the APP_KEY to root .env for Docker Compose
+# Get the generated key:
+grep APP_KEY src/.env
+# Add it to your root .env file (edit .env and set APP_KEY=base64:...)
+
+# Restart to apply APP_KEY from root .env
+docker compose down && docker compose up -d
 
 # Run database migrations
 docker compose exec php-fpm php artisan migrate
@@ -98,6 +106,8 @@ docker compose exec php-fpm npm install
 # Build frontend assets (optional)
 docker compose exec php-fpm npm run build
 ```
+
+**Note:** The APP_KEY must be in both the root `.env` (for Docker Compose) and `src/.env` (for Laravel). The `key:generate` command only updates `src/.env`, so you need to manually copy it to the root `.env` file.
 
 ### 5. Access the Application
 
@@ -598,6 +608,64 @@ docker compose exec php-fpm ./vendor/bin/pint --test
 ---
 
 ## Troubleshooting
+
+### "File Not Found" Error
+
+If you see "file not found" when accessing the application, this typically indicates one of three issues:
+
+#### Issue 1: Nginx Volume Mount Not Working
+
+**Symptom:** `realpath() "/var/www/public" failed (2: No such file or directory)` in nginx logs.
+
+**Fix:** Force-recreate the nginx container:
+
+```bash
+docker compose up -d --force-recreate nginx
+```
+
+#### Issue 2: Storage Directory Permissions
+
+**Symptom:** `file_put_contents(/var/www/storage/framework/views/...): Failed to open stream: Permission denied`
+
+**Cause:** PHP-FPM worker processes run as `www-data` user, but storage directories may have different ownership.
+
+**Fix:** The development entrypoint script automatically fixes this on container startup. If you still have issues:
+
+```bash
+docker compose exec php-fpm chown -R www-data:www-data /var/www/storage
+docker compose exec php-fpm chown -R www-data:www-data /var/www/bootstrap/cache
+```
+
+Or restart the php-fpm container to trigger the entrypoint fix:
+
+```bash
+docker compose restart php-fpm
+```
+
+#### Issue 3: Missing APP_KEY
+
+**Symptom:** `MissingAppKeyException - No application encryption key has been specified`
+
+**Cause:** The APP_KEY environment variable is not set. Docker Compose reads environment variables from the root `.env` file, not from `src/.env`.
+
+**Fix:**
+
+```bash
+# 1. Generate key (writes to src/.env)
+docker compose exec php-fpm php artisan key:generate
+
+# 2. Copy the key to the root .env file
+# First, get the key from src/.env:
+grep APP_KEY src/.env
+
+# Then add it to the root .env file (replace with actual key):
+# APP_KEY=base64:your-generated-key-here
+
+# 3. Restart containers to apply
+docker compose down && docker compose up -d
+```
+
+**Important:** Both `.env` files need the same APP_KEY value - the root `.env` for Docker Compose environment variables, and `src/.env` for Laravel's direct file reads.
 
 ### Container Issues
 

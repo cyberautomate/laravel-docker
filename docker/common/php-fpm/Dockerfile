@@ -89,11 +89,15 @@ RUN echo '#!/bin/sh' > /usr/local/bin/php-fpm-healthcheck \
     && echo 'SCRIPT_NAME=/health SCRIPT_FILENAME=/health REQUEST_METHOD=GET cgi-fcgi -bind -connect 127.0.0.1:9000 2>/dev/null | head -n 1 | grep -q "Status: 200" && exit 0 || exit 1' >> /usr/local/bin/php-fpm-healthcheck \
     && chmod +x /usr/local/bin/php-fpm-healthcheck
 
-# Keep as root for development (allows volume permissions to work better on Windows)
+# Copy development entrypoint script (fixes storage permissions on startup)
+COPY --chmod=755 docker/scripts/entrypoint/php-fpm-dev-entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# Keep as root for development (allows entrypoint to fix permissions)
 # Application code will be mounted as volume
 
 EXPOSE 9000
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["php-fpm"]
 
 # -----------------------------------------------------------------------------
