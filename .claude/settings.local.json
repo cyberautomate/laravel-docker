@@ -15,7 +15,8 @@
       "Bash(docker ps:*)",
       "Bash(docker logs:*)",
       "mcp__MCP_DOCKER__puppeteer_screenshot",
-      "Bash(bash:*)"
+      "Bash(bash:*)",
+      "Bash(dir:*)"
     ]
   }
 }
