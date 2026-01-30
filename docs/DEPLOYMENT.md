@@ -1,543 +1,478 @@
-# Deployment Guide
+# Production Deployment Guide
 
-This document covers the CI/CD pipeline configuration and production deployment procedures.
+This guide walks you through deploying the Laravel application to an **Azure Virtual Machine running Ubuntu Linux**. The guide assumes your VM has no public IP address and you connect via VPN.
 
 ## Table of Contents
 
-- [CI/CD Pipeline Overview](#cicd-pipeline-overview)
-- [GitHub Actions Workflow](#github-actions-workflow)
-- [Production Environment Setup](#production-environment-setup)
-- [Secrets Management](#secrets-management)
-- [Deployment Process](#deployment-process)
-- [Rollback Procedures](#rollback-procedures)
-- [Monitoring and Health Checks](#monitoring-and-health-checks)
+1. [Before You Begin](#before-you-begin)
+2. [Step 1: Prepare Your Azure VM](#step-1-prepare-your-azure-vm)
+3. [Step 2: Install Docker](#step-2-install-docker)
+4. [Step 3: Get the Application Code](#step-3-get-the-application-code)
+5. [Step 4: Configure Secrets](#step-4-configure-secrets)
+6. [Step 5: Deploy the Application](#step-5-deploy-the-application)
+7. [Step 6: Verify Everything Works](#step-6-verify-everything-works)
+8. [Updating the Application](#updating-the-application)
+9. [Rolling Back if Something Goes Wrong](#rolling-back-if-something-goes-wrong)
+10. [Monitoring Your Application](#monitoring-your-application)
+11. [Troubleshooting](#troubleshooting)
+12. [CI/CD Reference](#cicd-reference)
 
 ---
 
-## CI/CD Pipeline Overview
+## Before You Begin
 
-The application uses GitHub Actions for continuous integration and deployment.
+### What You'll Need
 
-### Pipeline Stages
+| Item | Description |
+|------|-------------|
+| Azure VM | Ubuntu 22.04 LTS (or newer) with at least 4GB RAM and 20GB storage |
+| VPN Access | Connection to your Azure virtual network to reach the VM |
+| SSH Client | Terminal (macOS/Linux) or PuTTY/Windows Terminal (Windows) |
+| GitHub Account | Access to the repository containing your Laravel code |
+
+### Architecture Overview
+
+Your production environment will run these services inside Docker containers:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           GITHUB ACTIONS                                │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────────────────────┐ │
-│  │    TEST     │───▶│    BUILD    │───▶│         DEPLOY              │ │
-│  │             │    │             │    │                             │ │
-│  │ - PHPUnit   │    │ - PHP-FPM   │    │ - Pull images               │ │
-│  │ - Frontend  │    │ - Nginx     │    │ - Run migrations            │ │
-│  │ - Coverage  │    │ - Push GHCR │    │ - Clear caches              │ │
-│  └─────────────┘    └─────────────┘    │ - Health check              │ │
-│                                         └─────────────────────────────┘ │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
-```
-
-### Triggers
-
-- **Push to `main` branch**: Full pipeline (test → build → deploy)
-- **Manual dispatch**: Optional skip_tests flag
-- **Excluded files**: `*.md`, `.gitignore`, `LICENSE`
-
----
-
-## GitHub Actions Workflow
-
-**File**: `.github/workflows/deploy.yml`
-
-### Test Job
-
-```yaml
-test:
-  runs-on: ubuntu-latest
-  services:
-    postgres:
-      image: postgres:17-alpine
-      env:
-        POSTGRES_DB: laravel_test
-        POSTGRES_USER: laravel
-        POSTGRES_PASSWORD: secret
-      ports:
-        - 5432:5432
-      options: >-
-        --health-cmd pg_isready
-        --health-interval 10s
-        --health-timeout 5s
-        --health-retries 5
-    redis:
-      image: redis:7-alpine
-      ports:
-        - 6379:6379
-      options: >-
-        --health-cmd "redis-cli ping"
-        --health-interval 10s
-        --health-timeout 5s
-        --health-retries 5
-
-  steps:
-    - uses: actions/checkout@v4
-
-    - name: Setup PHP
-      uses: shivammathur/setup-php@v2
-      with:
-        php-version: '8.3'
-        extensions: pdo, pdo_pgsql, redis, gd, zip, intl, mbstring, bcmath
-
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '22'
-        cache: 'npm'
-        cache-dependency-path: src/package-lock.json
-
-    - name: Install Composer dependencies
-      working-directory: src
-      run: composer install --prefer-dist --no-progress
-
-    - name: Install NPM dependencies
-      working-directory: src
-      run: npm ci
-
-    - name: Build frontend assets
-      working-directory: src
-      run: npm run build
-
-    - name: Prepare environment
-      working-directory: src
-      run: |
-        cp .env.example .env
-        php artisan key:generate
-
-    - name: Run database migrations
-      working-directory: src
-      run: php artisan migrate --force
-      env:
-        DB_CONNECTION: pgsql
-        DB_HOST: 127.0.0.1
-        DB_PORT: 5432
-        DB_DATABASE: laravel_test
-        DB_USERNAME: laravel
-        DB_PASSWORD: secret
-
-    - name: Run tests
-      working-directory: src
-      run: php artisan test --coverage-clover=coverage.xml
-      env:
-        DB_CONNECTION: pgsql
-        DB_HOST: 127.0.0.1
-        DB_PORT: 5432
-        DB_DATABASE: laravel_test
-        DB_USERNAME: laravel
-        DB_PASSWORD: secret
-        REDIS_HOST: 127.0.0.1
-        REDIS_PORT: 6379
-
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
-      with:
-        files: src/coverage.xml
-        fail_ci_if_error: false
-```
-
-### Build Job
-
-```yaml
-build:
-  needs: test
-  runs-on: ubuntu-latest
-  permissions:
-    contents: read
-    packages: write
-
-  steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Login to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Extract metadata
-      id: meta
-      uses: docker/metadata-action@v5
-      with:
-        images: ghcr.io/${{ github.repository }}
-
-    - name: Build and push PHP-FPM image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: docker/common/php-fpm/Dockerfile
-        target: production
-        push: true
-        tags: |
-          ghcr.io/${{ github.repository }}/php-fpm:${{ github.sha }}
-          ghcr.io/${{ github.repository }}/php-fpm:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Build and push Nginx image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: docker/production/nginx/Dockerfile
-        push: true
-        tags: |
-          ghcr.io/${{ github.repository }}/nginx:${{ github.sha }}
-          ghcr.io/${{ github.repository }}/nginx:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-```
-
-### Deploy Job
-
-```yaml
-deploy:
-  needs: build
-  runs-on: ubuntu-latest
-  environment: production
-
-  steps:
-    - name: Deploy to production
-      uses: appleboy/ssh-action@v1.0.0
-      with:
-        host: ${{ secrets.SERVER_HOST }}
-        username: ${{ secrets.SERVER_USER }}
-        key: ${{ secrets.SSH_PRIVATE_KEY }}
-        script: |
-          cd /var/www/laravel
-
-          # Pull latest images
-          docker compose -f docker-compose.prod.yml pull
-
-          # Run migrations
-          docker compose -f docker-compose.prod.yml run --rm php-fpm \
-            php artisan migrate --force
-
-          # Deploy with zero-downtime
-          docker compose -f docker-compose.prod.yml up -d --remove-orphans
-
-          # Clear and rebuild caches
-          docker compose -f docker-compose.prod.yml exec -T php-fpm \
-            php artisan config:cache
-          docker compose -f docker-compose.prod.yml exec -T php-fpm \
-            php artisan route:cache
-          docker compose -f docker-compose.prod.yml exec -T php-fpm \
-            php artisan view:cache
-
-          # Restart queue workers to pick up new code
-          docker compose -f docker-compose.prod.yml exec -T php-fpm \
-            php artisan queue:restart
-
-          # Health check
-          sleep 10
-          curl -f http://localhost/health || exit 1
-
-    - name: Notify Slack (Success)
-      if: success()
-      uses: 8398a7/action-slack@v3
-      with:
-        status: success
-        text: 'Deployment to production succeeded!'
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-
-    - name: Notify Slack (Failure)
-      if: failure()
-      uses: 8398a7/action-slack@v3
-      with:
-        status: failure
-        text: 'Deployment to production failed!'
-      env:
-        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+┌─────────────────────────────────────────────────────────────────┐
+│                        Azure VM (Ubuntu)                         │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                     Docker Containers                      │  │
+│  │  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌─────────────┐  │  │
+│  │  │  Nginx  │  │ PHP-FPM │  │ PostgreSQL│  │    Redis    │  │  │
+│  │  │  :80    │──│  App    │──│  Database │  │ Cache/Queue │  │  │
+│  │  └─────────┘  └─────────┘  └──────────┘  └─────────────┘  │  │
+│  │                      │                                      │  │
+│  │               ┌──────────────┐    ┌────────────────────┐   │  │
+│  │               │ Queue Worker │    │ Backup Service     │   │  │
+│  │               │ (Background) │    │ (Daily to Azure)   │   │  │
+│  │               └──────────────┘    └────────────────────┘   │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+            ↑
+            │ VPN Connection
+            │
+        Your Computer
 ```
 
 ---
 
-## Production Environment Setup
+## Step 1: Prepare Your Azure VM
 
-### Server Requirements
+### Connect to Your VM
 
-- **OS**: Ubuntu 22.04 LTS or later
-- **Docker**: 24.0+
-- **Docker Compose**: 2.20+
-- **Memory**: 4GB minimum
-- **Storage**: 20GB minimum
-
-### Initial Server Setup
+1. Connect to your VPN
+2. Open your terminal and SSH into the VM:
 
 ```bash
-# Update system
+ssh your-username@10.x.x.x    # Use your VM's private IP address
+```
+
+### Update the System
+
+```bash
+# Update package lists and upgrade existing packages
 sudo apt update && sudo apt upgrade -y
 
-# Install Docker
-curl -fsSL https://get.docker.com | sh
+# Install essential utilities
+sudo apt install -y curl git unzip
+```
+
+---
+
+## Step 2: Install Docker
+
+### Install Docker Engine
+
+```bash
+# Download and run Docker's official install script
+curl -fsSL https://get.docker.com | sudo sh
+
+# Add your user to the docker group (so you don't need sudo)
 sudo usermod -aG docker $USER
+```
 
-# Install Docker Compose
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
+### Apply Group Changes
 
-# Create application directory
+Log out and back in for the group change to take effect:
+
+```bash
+exit
+```
+
+Then SSH back in:
+
+```bash
+ssh your-username@10.x.x.x
+```
+
+### Verify Docker is Working
+
+```bash
+docker --version
+# Expected output: Docker version 24.x.x or higher
+
+docker compose version
+# Expected output: Docker Compose version v2.x.x or higher
+
+# Test that Docker runs without sudo
+docker run hello-world
+```
+
+---
+
+## Step 3: Get the Application Code
+
+### Create the Application Directory
+
+```bash
+# Create the directory where the application will live
 sudo mkdir -p /var/www/laravel
+
+# Make your user the owner
 sudo chown $USER:$USER /var/www/laravel
 
-# Clone repository
+# Navigate to the directory
 cd /var/www/laravel
-git clone https://github.com/your-org/laravel.git .
 ```
 
-### Directory Structure on Server
+### Clone the Repository
 
+```bash
+# Clone your repository (replace with your actual repo URL)
+git clone https://github.com/your-org/your-laravel-app.git .
+
+# The . at the end clones into the current directory
 ```
-/var/www/laravel/
-├── docker-compose.prod.yml
-├── .env                      # Environment configuration (encrypted secrets)
-├── .env.encrypted            # Encrypted environment file (safe for version control)
-├── backups/
-└── storage/
+
+If your repository is private, you'll need to authenticate. You can either:
+- Use a GitHub Personal Access Token
+- Set up SSH keys on the VM
+
+---
+
+## Step 4: Configure Secrets
+
+The application uses Docker secrets stored in text files. This keeps sensitive data out of environment variables and logs.
+
+### Create the Secrets Directory
+
+```bash
+cd /var/www/laravel
+mkdir -p secrets
+```
+
+### Generate Your Secrets
+
+You'll need to create 6 secret files. Use these commands to generate secure values:
+
+#### 1. Application Key
+
+```bash
+# Generate a random Laravel application key
+echo "base64:$(openssl rand -base64 32)" > secrets/app_key.txt
+```
+
+#### 2. Database Username
+
+```bash
+# Set your database username
+echo "laravel" > secrets/db_username.txt
+```
+
+#### 3. Database Password
+
+```bash
+# Generate a secure database password
+openssl rand -base64 24 > secrets/db_password.txt
+
+# View it so you can save it somewhere safe
+cat secrets/db_password.txt
+```
+
+#### 4. Redis Password
+
+```bash
+# Generate a secure Redis password
+openssl rand -base64 24 > secrets/redis_password.txt
+```
+
+#### 5. Azure Storage Account (for backups)
+
+```bash
+# Enter your Azure Storage Account name
+echo "your_storage_account_name" > secrets/azure_storage_account.txt
+```
+
+#### 6. Azure Storage Key (for backups)
+
+```bash
+# Enter your Azure Storage Account key
+echo "your_storage_account_key_here" > secrets/azure_storage_key.txt
+```
+
+> **Finding your Azure Storage credentials:**
+> 1. Go to the Azure Portal
+> 2. Navigate to your Storage Account
+> 3. Click "Access keys" in the left sidebar
+> 4. Copy the "Storage account name" and one of the "Key" values
+
+### Secure the Secrets Directory
+
+```bash
+# Make secrets readable only by your user
+chmod 700 secrets
+chmod 600 secrets/*
+```
+
+### Verify Your Secrets
+
+```bash
+# List all secret files (should show 6 files)
+ls -la secrets/
+
+# Output should look like:
+# -rw------- 1 user user   xx Jan 30 12:00 app_key.txt
+# -rw------- 1 user user   xx Jan 30 12:00 azure_storage_account.txt
+# -rw------- 1 user user   xx Jan 30 12:00 azure_storage_key.txt
+# -rw------- 1 user user   xx Jan 30 12:00 db_password.txt
+# -rw------- 1 user user   xx Jan 30 12:00 db_username.txt
+# -rw------- 1 user user   xx Jan 30 12:00 redis_password.txt
 ```
 
 ---
 
-## Secrets Management
+## Step 5: Deploy the Application
 
-All secrets are stored in `.env` files and encrypted using Laravel's built-in encryption.
-
-### Required Secrets
-
-#### GitHub Actions Secrets
-
-| Secret | Description |
-|--------|-------------|
-| `SSH_PRIVATE_KEY` | SSH key for server access |
-| `SSH_KNOWN_HOSTS` | Server SSH fingerprint |
-| `SERVER_HOST` | Production server IP/hostname |
-| `SERVER_USER` | SSH username |
-| `SLACK_WEBHOOK_URL` | Slack notification webhook |
-| `LARAVEL_ENV_ENCRYPTION_KEY` | Key for decrypting `.env.encrypted` |
-
-#### Production Server Secrets
-
-All secrets are stored in the `.env` file and encrypted:
+### Pull the Docker Images
 
 ```bash
-# Navigate to project directory
 cd /var/www/laravel
 
-# Create .env from template
-cp .env.example .env
-
-# Generate application key
-php artisan key:generate
-
-# Edit .env to set all secrets
-nano .env
+# Pull all required images (this may take a few minutes the first time)
+docker compose -f docker-compose.prod.yml pull
 ```
 
-Set the following values in your `.env` file:
+### Start the Containers
 
 ```bash
-APP_KEY=base64:your-generated-key
-DB_USERNAME=laravel
-DB_PASSWORD=your-secure-database-password
-REDIS_PASSWORD=your-secure-redis-password
-AZURE_STORAGE_ACCOUNT=your_storage_account
-AZURE_STORAGE_KEY=your_storage_key
+# Start all services in the background
+docker compose -f docker-compose.prod.yml up -d
 ```
 
-#### Encrypting the Environment File
+You'll see output like:
+```
+[+] Running 6/6
+ ✔ Network laravel-frontend-prod  Created
+ ✔ Network laravel-backend-prod   Created
+ ✔ Container laravel-redis        Started
+ ✔ Container laravel-postgres     Started
+ ✔ Container laravel-php          Started
+ ✔ Container laravel-nginx        Started
+ ✔ Container laravel-queue        Started
+ ✔ Container laravel-backup       Started
+```
 
-After configuring secrets in `.env`, encrypt it for secure storage and deployment:
+### Run Database Migrations
 
 ```bash
-# Encrypt the .env file (generates .env.encrypted)
-php artisan env:encrypt --env=production
-
-# Save the encryption key securely (displayed after encryption)
-# Store this key in GitHub Actions secrets as LARAVEL_ENV_ENCRYPTION_KEY
+# Run Laravel migrations to set up the database tables
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan migrate --force
 ```
 
-The encrypted file (`.env.encrypted`) can be safely committed to version control.
+Type `yes` if prompted to confirm running in production.
 
-#### Decrypting on Deployment
-
-During deployment, decrypt the environment file:
+### Build the Caches
 
 ```bash
-# Decrypt using the encryption key
-php artisan env:decrypt --env=production --key=$LARAVEL_ENV_ENCRYPTION_KEY
+# Cache configuration for better performance
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan config:cache
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan route:cache
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan view:cache
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan event:cache
 ```
-
-### Environment Variables in Docker Compose
-
-Secrets are passed via environment variables from the `.env` file:
-
-```yaml
-services:
-  php-fpm:
-    env_file:
-      - .env
-    environment:
-      - APP_ENV=production
-      - APP_DEBUG=false
-```
-
-### Security Best Practices
-
-- Never commit `.env` files to version control
-- Store the encryption key securely (password manager, vault, GitHub secrets)
-- Rotate secrets periodically
-- Use strong, randomly generated passwords
 
 ---
 
-## Deployment Process
+## Step 6: Verify Everything Works
 
-### Manual Deployment
+### Check Container Status
 
 ```bash
-# SSH to server
-ssh user@server
+docker compose -f docker-compose.prod.yml ps
+```
 
-# Navigate to project
+All containers should show `Up` and `(healthy)`:
+```
+NAME               STATUS                   PORTS
+laravel-nginx      Up 2 minutes (healthy)   0.0.0.0:80->80/tcp
+laravel-php        Up 2 minutes (healthy)   9000/tcp
+laravel-postgres   Up 2 minutes (healthy)   5432/tcp
+laravel-redis      Up 2 minutes (healthy)   6379/tcp
+laravel-queue      Up 2 minutes
+laravel-backup     Up 2 minutes
+```
+
+### Test the Health Endpoint
+
+```bash
+curl http://localhost/health
+```
+
+Expected output:
+```
+healthy
+```
+
+### Test the Application
+
+Open a browser and navigate to your VM's private IP address:
+```
+http://10.x.x.x/
+```
+
+You should see your Laravel application's homepage.
+
+---
+
+## Updating the Application
+
+When you need to deploy new code changes:
+
+### Quick Update (No Database Changes)
+
+```bash
 cd /var/www/laravel
 
 # Pull latest code
 git pull origin main
 
-# Pull latest images
+# Pull latest Docker images
 docker compose -f docker-compose.prod.yml pull
 
-# Run migrations
-docker compose -f docker-compose.prod.yml run --rm php-fpm \
-  php artisan migrate --force
-
-# Deploy containers
+# Restart containers with new images
 docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-# Clear caches
-docker compose -f docker-compose.prod.yml exec php-fpm \
-  php artisan config:cache
-docker compose -f docker-compose.prod.yml exec php-fpm \
-  php artisan route:cache
-docker compose -f docker-compose.prod.yml exec php-fpm \
-  php artisan view:cache
-docker compose -f docker-compose.prod.yml exec php-fpm \
-  php artisan event:cache
+# Clear and rebuild caches
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan config:cache
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan route:cache
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan view:cache
 
-# Restart queue workers
-docker compose -f docker-compose.prod.yml exec php-fpm \
-  php artisan queue:restart
+# Tell queue workers to restart after their current job
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan queue:restart
 
-# Verify deployment
-curl -f http://localhost/health
+# Verify the update
+curl http://localhost/health
 ```
 
-### Zero-Downtime Deployment
+### Full Update (With Database Changes)
 
-The deployment achieves zero-downtime through:
+```bash
+cd /var/www/laravel
 
-1. **Pre-pulled images**: Images are pulled before stopping containers
-2. **Health checks**: New containers must be healthy before traffic is routed
-3. **Rolling updates**: Docker Compose handles graceful container replacement
-4. **Queue restart**: Workers finish current jobs before restarting
+# Pull latest code
+git pull origin main
 
-### Deployment Checklist
+# Pull latest Docker images
+docker compose -f docker-compose.prod.yml pull
 
-- [ ] All tests pass
-- [ ] Docker images built successfully
-- [ ] Database migrations reviewed
-- [ ] Secrets updated (if needed)
-- [ ] Backup completed
-- [ ] Team notified
+# Run database migrations BEFORE restarting containers
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan migrate --force
+
+# Restart containers
+docker compose -f docker-compose.prod.yml up -d --remove-orphans
+
+# Rebuild caches
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan config:cache
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan route:cache
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan view:cache
+
+# Restart queue workers
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan queue:restart
+
+# Verify
+curl http://localhost/health
+```
 
 ---
 
-## Rollback Procedures
+## Rolling Back if Something Goes Wrong
 
-### Quick Rollback (Previous Image)
+### Roll Back to Previous Code
+
+If an update causes problems, you can quickly revert:
 
 ```bash
-# Roll back to previous image tag
-export IMAGE_TAG=previous_sha
+cd /var/www/laravel
 
-# Deploy previous version
+# See recent commits to find the one you want
+git log --oneline -10
+
+# Roll back to a specific commit
+git checkout <commit-hash>
+
+# Restart containers
 docker compose -f docker-compose.prod.yml up -d
 
-# Verify rollback
-curl -f http://localhost/health
+# Verify
+curl http://localhost/health
 ```
 
-### Database Rollback
+### Roll Back Database Migrations
+
+If a migration caused issues:
 
 ```bash
-# Roll back last migration
+# Undo the last migration
 docker compose -f docker-compose.prod.yml exec php-fpm \
   php artisan migrate:rollback --step=1
 
-# Roll back multiple migrations
+# Undo multiple migrations (e.g., last 3)
 docker compose -f docker-compose.prod.yml exec php-fpm \
   php artisan migrate:rollback --step=3
 ```
 
-### Full Rollback (Including Database)
+### Complete Restore from Backup
+
+For major issues, restore from a database backup:
 
 ```bash
-# 1. Stop current deployment
+# Stop the application
 docker compose -f docker-compose.prod.yml down
 
-# 2. Restore database from backup
+# List available backups
+ls -la /var/lib/docker/volumes/laravel-backup-data-prod/_data/
+
+# Restore a specific backup (replace YYYYMMDD with the date)
 docker compose -f docker-compose.prod.yml run --rm backup \
-  pg_restore -h postgres -U $DB_USERNAME -d $DB_DATABASE /backup/backup_YYYYMMDD.sql
+  pg_restore -h postgres -U laravel -d laravel /backup/backup_YYYYMMDD.sql
 
-# 3. Deploy previous version
-export IMAGE_TAG=previous_sha
+# Start the application
 docker compose -f docker-compose.prod.yml up -d
-
-# 4. Verify
-curl -f http://localhost/health
 ```
 
 ---
 
-## Monitoring and Health Checks
+## Monitoring Your Application
 
-### Health Check Endpoints
-
-| Endpoint | Service | Response |
-|----------|---------|----------|
-| `/health` | Nginx | `healthy\n` (200 OK) |
-
-### Docker Health Status
+### View Container Status
 
 ```bash
-# Check all container health
+# Quick status check
 docker compose -f docker-compose.prod.yml ps
 
-# Detailed health check output
-docker inspect --format='{{json .State.Health}}' laravel-php
-docker inspect --format='{{json .State.Health}}' laravel-nginx
-docker inspect --format='{{json .State.Health}}' laravel-postgres
-docker inspect --format='{{json .State.Health}}' laravel-redis
+# Detailed resource usage (CPU, memory)
+docker stats
 ```
 
-### Log Monitoring
+### View Logs
 
 ```bash
-# All logs
+# All logs (follow mode - press Ctrl+C to exit)
 docker compose -f docker-compose.prod.yml logs -f
 
-# Specific service logs
+# Logs from a specific service
 docker compose -f docker-compose.prod.yml logs -f nginx
 docker compose -f docker-compose.prod.yml logs -f php-fpm
 docker compose -f docker-compose.prod.yml logs -f postgres
@@ -545,115 +480,129 @@ docker compose -f docker-compose.prod.yml logs -f queue
 
 # Laravel application logs
 docker compose -f docker-compose.prod.yml exec php-fpm \
-  tail -f storage/logs/laravel.log
+  tail -100 storage/logs/laravel.log
 ```
 
-### Resource Monitoring
+### Check Queue Jobs
 
 ```bash
-# Container resource usage
-docker stats
-
-# Specific containers
-docker stats laravel-php laravel-nginx laravel-postgres laravel-redis
-```
-
-### Database Monitoring
-
-```bash
-# Check connections
-docker compose -f docker-compose.prod.yml exec postgres \
-  psql -U laravel -c "SELECT count(*) FROM pg_stat_activity;"
-
-# Check table sizes
-docker compose -f docker-compose.prod.yml exec postgres \
-  psql -U laravel -c "SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) FROM pg_catalog.pg_statio_user_tables ORDER BY pg_total_relation_size(relid) DESC;"
-```
-
-### Redis Monitoring
-
-```bash
-# Redis info
-docker compose -f docker-compose.prod.yml exec redis redis-cli info
-
-# Memory usage
-docker compose -f docker-compose.prod.yml exec redis redis-cli info memory
-
-# Connected clients
-docker compose -f docker-compose.prod.yml exec redis redis-cli client list
-```
-
-### Queue Monitoring
-
-```bash
-# Queue status
-docker compose -f docker-compose.prod.yml exec php-fpm \
-  php artisan queue:monitor redis:default
-
-# Failed jobs
+# See failed jobs
 docker compose -f docker-compose.prod.yml exec php-fpm \
   php artisan queue:failed
 
-# Retry failed jobs
+# Retry all failed jobs
 docker compose -f docker-compose.prod.yml exec php-fpm \
   php artisan queue:retry all
+```
+
+### Database Information
+
+```bash
+# Connect to PostgreSQL
+docker compose -f docker-compose.prod.yml exec postgres \
+  psql -U laravel
+
+# Check active connections
+docker compose -f docker-compose.prod.yml exec postgres \
+  psql -U laravel -c "SELECT count(*) FROM pg_stat_activity;"
 ```
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
-
-#### Container Won't Start
+### Container Won't Start
 
 ```bash
-# Check logs
+# Check what's wrong
 docker compose -f docker-compose.prod.yml logs php-fpm
 
-# Check container status
-docker compose -f docker-compose.prod.yml ps
+# Common fixes:
+# 1. Secrets files missing or wrong permissions
+ls -la secrets/
 
-# Inspect container
-docker inspect laravel-php
+# 2. Port 80 already in use
+sudo lsof -i :80
 ```
 
-#### Database Connection Failed
-
-```bash
-# Check PostgreSQL logs
-docker compose -f docker-compose.prod.yml logs postgres
-
-# Test connection manually
-docker compose -f docker-compose.prod.yml exec php-fpm \
-  php -r "new PDO('pgsql:host=postgres;port=5432;dbname=laravel', env('DB_USERNAME'), env('DB_PASSWORD'));"
-```
-
-#### Redis Connection Failed
-
-```bash
-# Check Redis logs
-docker compose -f docker-compose.prod.yml logs redis
-
-# Test connection
-docker compose -f docker-compose.prod.yml exec redis redis-cli ping
-```
-
-#### Permission Issues
+### "Permission Denied" Errors
 
 ```bash
 # Fix storage permissions
 docker compose -f docker-compose.prod.yml exec php-fpm \
   chmod -R 775 storage bootstrap/cache
-docker compose -f docker-compose.prod.yml exec php-fpm \
-  chown -R laravel:laravel storage bootstrap/cache
 ```
+
+### Database Connection Failed
+
+```bash
+# Check PostgreSQL is running
+docker compose -f docker-compose.prod.yml logs postgres
+
+# Verify the password file exists and is readable
+cat secrets/db_password.txt
+```
+
+### Application Shows Error Page
+
+```bash
+# Check Laravel logs for details
+docker compose -f docker-compose.prod.yml exec php-fpm \
+  tail -50 storage/logs/laravel.log
+
+# Clear all caches and try again
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan cache:clear
+docker compose -f docker-compose.prod.yml exec php-fpm php artisan config:clear
+```
+
+### Redis Connection Failed
+
+```bash
+# Check Redis is running
+docker compose -f docker-compose.prod.yml exec redis redis-cli ping
+# Should return: PONG
+```
+
+---
+
+## CI/CD Reference
+
+If you want to automate deployments using GitHub Actions, the workflow file is located at `.github/workflows/deploy.yml`.
+
+### Required GitHub Secrets
+
+Configure these in your GitHub repository under Settings → Secrets and variables → Actions:
+
+| Secret | Description | Example |
+|--------|-------------|---------|
+| `SSH_PRIVATE_KEY` | Private SSH key for connecting to your VM | Contents of `~/.ssh/id_rsa` |
+| `SERVER_HOST` | Your VM's private IP address | `10.0.1.50` |
+| `SERVER_USER` | SSH username | `azureuser` |
+| `SLACK_WEBHOOK_URL` | (Optional) For deployment notifications | `https://hooks.slack.com/...` |
+
+### How the Pipeline Works
+
+```
+Push to main branch
+        │
+        ▼
+   ┌─────────┐     ┌─────────┐     ┌─────────┐
+   │  TEST   │ ──▶ │  BUILD  │ ──▶ │ DEPLOY  │
+   │         │     │         │     │         │
+   │ PHPUnit │     │ Docker  │     │ SSH to  │
+   │ Tests   │     │ Images  │     │ Server  │
+   └─────────┘     └─────────┘     └─────────┘
+```
+
+1. **Test**: Runs PHPUnit tests against a temporary database
+2. **Build**: Creates production Docker images and pushes to GitHub Container Registry
+3. **Deploy**: Connects via SSH and runs the update commands
 
 ---
 
 ## Related Documentation
 
-- [Architecture Overview](./ARCHITECTURE.md)
-- [Docker Configuration](./DOCKER.md)
-- [Services Configuration](./SERVICES.md)
-- [Development Guide](./DEVELOPMENT.md)
+- [Architecture Overview](./ARCHITECTURE.md) - System design and component relationships
+- [Docker Configuration](./DOCKER.md) - Detailed Docker setup information
+- [Services Configuration](./SERVICES.md) - Individual service settings
+- [Development Guide](./DEVELOPMENT.md) - Local development setup
