@@ -7,6 +7,7 @@
 #   - SSH_KNOWN_HOSTS: SSH host verification string
 #   - SERVER_HOST: Azure VM IP address or hostname
 #   - SERVER_USER: SSH username for deployment
+#   - COMPOSER_AUTH: Composer authentication JSON for private packages (e.g., FluxUI Pro)
 #   - SLACK_WEBHOOK_URL: (Optional) Slack notification webhook
 # =============================================================================
 
@@ -218,6 +219,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           platforms: linux/amd64
+          secrets: |
+            composer_auth=${{ secrets.COMPOSER_AUTH }}
 
       # -----------------------------------------------------------------------
       # Build Nginx Image

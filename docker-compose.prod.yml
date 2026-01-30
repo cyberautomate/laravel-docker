@@ -66,6 +66,8 @@ services:
       context: .
       dockerfile: docker/common/php-fpm/Dockerfile
       target: production
+      secrets:
+        - composer_auth
     image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/php-fpm:latest
     container_name: laravel-php
     restart: always
@@ -222,6 +224,8 @@ services:
       context: .
       dockerfile: docker/common/php-fpm/Dockerfile
       target: production
+      secrets:
+        - composer_auth
     image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/php-fpm:latest
     container_name: laravel-queue
     restart: always
@@ -314,6 +318,13 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+# -----------------------------------------------------------------------------
+# Secrets - Build-time secrets for private package authentication
+# -----------------------------------------------------------------------------
+secrets:
+  composer_auth:
+    environment: COMPOSER_AUTH
 
 # -----------------------------------------------------------------------------
 # Networks

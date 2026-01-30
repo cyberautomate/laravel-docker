@@ -117,8 +117,9 @@ COPY --from=composer:2.7 /usr/bin/composer /usr/bin/composer
 # Copy application code
 COPY --chown=laravel:laravel src/ /var/www/
 
-# Install production dependencies only
-RUN composer install \
+# Install production dependencies only (mount Composer auth for private packages)
+RUN --mount=type=secret,id=composer_auth,target=/root/.composer/auth.json \
+    composer install \
     --no-dev \
     --no-interaction \
     --optimize-autoloader \
