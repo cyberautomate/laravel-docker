@@ -125,8 +125,7 @@ RUN --mount=type=secret,id=composer_auth,target=/root/.composer/auth.json \
     --optimize-autoloader \
     --no-scripts \
     --prefer-dist \
-    && composer clear-cache \
-    && rm -rf /root/.composer
+    && composer clear-cache
 
 # -----------------------------------------------------------------------------
 # Production Stage - Optimized and Hardened
