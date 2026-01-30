@@ -15,6 +15,9 @@ services:
   # Nginx Web Server (Security Hardened)
   # ---------------------------------------------------------------------------
   nginx:
+    build:
+      context: .
+      dockerfile: docker/production/nginx/Dockerfile
     image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/nginx:latest
     container_name: laravel-nginx
     restart: always
@@ -59,6 +62,10 @@ services:
   # PHP-FPM Application Server (Security Hardened)
   # ---------------------------------------------------------------------------
   php-fpm:
+    build:
+      context: .
+      dockerfile: docker/common/php-fpm/Dockerfile
+      target: production
     image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/php-fpm:latest
     container_name: laravel-php
     restart: always
@@ -211,6 +218,10 @@ services:
   # Queue Worker (Security Hardened)
   # ---------------------------------------------------------------------------
   queue:
+    build:
+      context: .
+      dockerfile: docker/common/php-fpm/Dockerfile
+      target: production
     image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/php-fpm:latest
     container_name: laravel-queue
     restart: always
