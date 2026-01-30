@@ -1,12 +1,12 @@
 # =============================================================================
 # Docker Compose - Production Environment
-# Security-hardened with Docker secrets and network isolation
+# Security-hardened with .env file and network isolation
 #
 # Usage:
 #   docker compose -f docker-compose.prod.yml up -d
 #
 # Prerequisites:
-#   1. Create secrets directory with credential files
+#   1. Create .env file with production credentials
 #   2. Configure Azure Blob Storage for backups (optional)
 # =============================================================================
 
@@ -62,6 +62,8 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY:-your-org/laravel}/php-fpm:latest
     container_name: laravel-php
     restart: always
+    env_file:
+      - .env
     environment:
       - APP_ENV=production
       - APP_DEBUG=false
@@ -78,11 +80,6 @@ services:
       - LOG_CHANNEL=stderr
       - LOG_LEVEL=warning
       - MIGRATE_ON_START=false
-    secrets:
-      - app_key
-      - db_username
-      - db_password
-      - redis_password
     depends_on:
       postgres:
         condition: service_healthy
@@ -127,14 +124,13 @@ services:
     image: postgres:17-alpine
     container_name: laravel-postgres
     restart: always
+    env_file:
+      - .env
     environment:
       POSTGRES_DB: laravel
-      POSTGRES_USER_FILE: /run/secrets/db_username
-      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
-    secrets:
-      - db_username
-      - db_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
@@ -152,7 +148,7 @@ services:
           cpus: '0.5'
           memory: 256M
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/db_username) -d laravel"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d laravel"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -170,17 +166,17 @@ services:
     image: redis:7-alpine
     container_name: laravel-redis
     restart: always
+    env_file:
+      - .env
     command: >
       sh -c "redis-server
       --appendonly yes
-      --requirepass $$(cat /run/secrets/redis_password)
+      --requirepass ${REDIS_PASSWORD}
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
       --tcp-backlog 511
       --timeout 0
       --tcp-keepalive 300"
-    secrets:
-      - redis_password
     volumes:
       - redis_data:/data
     networks:
@@ -200,7 +196,7 @@ services:
           cpus: '0.1'
           memory: 128M
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$(cat /run/secrets/redis_password) ping | grep PONG"]
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -220,6 +216,8 @@ services:
     restart: always
     entrypoint: ["/usr/local/bin/queue-entrypoint.sh"]
     command: php artisan queue:work redis --sleep=3 --tries=3 --max-time=3600 --memory=256
+    env_file:
+      - .env
     environment:
       - APP_ENV=production
       - APP_DEBUG=false
@@ -233,11 +231,6 @@ services:
       - QUEUE_CONNECTION=redis
       - LOG_CHANNEL=stderr
       - LOG_LEVEL=info
-    secrets:
-      - app_key
-      - db_username
-      - db_password
-      - redis_password
     depends_on:
       php-fpm:
         condition: service_healthy
@@ -270,21 +263,22 @@ services:
     image: jkaninda/pg-bkup:latest
     container_name: laravel-backup
     restart: always
+    env_file:
+      - .env
     environment:
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=laravel
+      - DB_USERNAME=${DB_USERNAME}
+      - DB_PASSWORD=${DB_PASSWORD}
       # Backup schedule: Daily at 2:00 AM
       - CRON_EXPRESSION=0 2 * * *
       - BACKUP_RETENTION_DAYS=30
       # Azure Blob Storage configuration
+      - AZURE_STORAGE_ACCOUNT_NAME=${AZURE_STORAGE_ACCOUNT_NAME}
+      - AZURE_STORAGE_ACCOUNT_KEY=${AZURE_STORAGE_ACCOUNT_KEY}
       - AZURE_STORAGE_CONTAINER_NAME=${AZURE_STORAGE_CONTAINER_NAME:-backups}
       - STORAGE_PATH=azure
-    secrets:
-      - db_username
-      - db_password
-      - azure_storage_account
-      - azure_storage_key
     volumes:
       - backup_data:/backup
     depends_on:
@@ -339,19 +333,3 @@ volumes:
     driver: local
     name: laravel-backup-data-prod
 
-# -----------------------------------------------------------------------------
-# Secrets - Loaded from files in ./secrets directory
-# -----------------------------------------------------------------------------
-secrets:
-  app_key:
-    file: ./secrets/app_key.txt
-  db_username:
-    file: ./secrets/db_username.txt
-  db_password:
-    file: ./secrets/db_password.txt
-  redis_password:
-    file: ./secrets/redis_password.txt
-  azure_storage_account:
-    file: ./secrets/azure_storage_account.txt
-  azure_storage_key:
-    file: ./secrets/azure_storage_key.txt

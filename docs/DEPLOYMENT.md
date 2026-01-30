@@ -152,65 +152,60 @@ If your repository is private, you'll need to authenticate. You can either:
 
 ---
 
-## Step 4: Configure Secrets
+## Step 4: Configure Environment
 
-The application uses Docker secrets stored in text files. This keeps sensitive data out of environment variables and logs.
+The application uses a `.env` file for configuration. This keeps all settings in one place.
 
-### Create the Secrets Directory
+### Create the Environment File
 
 ```bash
 cd /var/www/laravel
-mkdir -p secrets
+
+# Copy the example file
+cp .env.example .env
 ```
 
-### Generate Your Secrets
-
-You'll need to create 6 secret files. Use these commands to generate secure values:
-
-#### 1. Application Key
+### Generate the Application Key
 
 ```bash
-# Generate a random Laravel application key
-echo "base64:$(openssl rand -base64 32)" > secrets/app_key.txt
+# Generate the Laravel APP_KEY
+docker compose -f docker-compose.prod.yml run --rm php-fpm php artisan key:generate
 ```
 
-#### 2. Database Username
+### Edit the Environment File
+
+Open `.env` in your editor and configure the production values:
 
 ```bash
-# Set your database username
-echo "laravel" > secrets/db_username.txt
+nano .env
 ```
 
-#### 3. Database Password
+Key settings to update:
 
 ```bash
-# Generate a secure database password
-openssl rand -base64 24 > secrets/db_password.txt
+# Application
+APP_ENV=production
+APP_DEBUG=false
+APP_URL=http://your-server-ip
 
-# View it so you can save it somewhere safe
-cat secrets/db_password.txt
+# Database (generate a secure password)
+DB_USERNAME=laravel
+DB_PASSWORD=your_secure_database_password
+
+# Redis (generate a secure password)
+REDIS_PASSWORD=your_secure_redis_password
+
+# Azure Storage (for backups)
+AZURE_STORAGE_ACCOUNT_NAME=your_storage_account_name
+AZURE_STORAGE_ACCOUNT_KEY=your_storage_account_key
+AZURE_STORAGE_CONTAINER_NAME=backups
 ```
 
-#### 4. Redis Password
-
-```bash
-# Generate a secure Redis password
-openssl rand -base64 24 > secrets/redis_password.txt
-```
-
-#### 5. Azure Storage Account (for backups)
-
-```bash
-# Enter your Azure Storage Account name
-echo "your_storage_account_name" > secrets/azure_storage_account.txt
-```
-
-#### 6. Azure Storage Key (for backups)
-
-```bash
-# Enter your Azure Storage Account key
-echo "your_storage_account_key_here" > secrets/azure_storage_key.txt
-```
+> **Generating secure passwords:**
+> ```bash
+> # Generate a random password
+> openssl rand -base64 24
+> ```
 
 > **Finding your Azure Storage credentials:**
 > 1. Go to the Azure Portal
@@ -218,27 +213,21 @@ echo "your_storage_account_key_here" > secrets/azure_storage_key.txt
 > 3. Click "Access keys" in the left sidebar
 > 4. Copy the "Storage account name" and one of the "Key" values
 
-### Secure the Secrets Directory
+### Secure the Environment File
 
 ```bash
-# Make secrets readable only by your user
-chmod 700 secrets
-chmod 600 secrets/*
+# Make .env readable only by your user
+chmod 600 .env
 ```
 
-### Verify Your Secrets
+### Verify Your Configuration
 
 ```bash
-# List all secret files (should show 6 files)
-ls -la secrets/
+# Check the file permissions
+ls -la .env
 
-# Output should look like:
-# -rw------- 1 user user   xx Jan 30 12:00 app_key.txt
-# -rw------- 1 user user   xx Jan 30 12:00 azure_storage_account.txt
-# -rw------- 1 user user   xx Jan 30 12:00 azure_storage_key.txt
-# -rw------- 1 user user   xx Jan 30 12:00 db_password.txt
-# -rw------- 1 user user   xx Jan 30 12:00 db_username.txt
-# -rw------- 1 user user   xx Jan 30 12:00 redis_password.txt
+# Output should show:
+# -rw------- 1 user user   xxx Jan 30 12:00 .env
 ```
 
 ---
@@ -518,8 +507,8 @@ docker compose -f docker-compose.prod.yml exec postgres \
 docker compose -f docker-compose.prod.yml logs php-fpm
 
 # Common fixes:
-# 1. Secrets files missing or wrong permissions
-ls -la secrets/
+# 1. .env file missing or wrong permissions
+ls -la .env
 
 # 2. Port 80 already in use
 sudo lsof -i :80
@@ -539,8 +528,8 @@ docker compose -f docker-compose.prod.yml exec php-fpm \
 # Check PostgreSQL is running
 docker compose -f docker-compose.prod.yml logs postgres
 
-# Verify the password file exists and is readable
-cat secrets/db_password.txt
+# Verify DB_PASSWORD is set in .env
+grep DB_PASSWORD .env
 ```
 
 ### Application Shows Error Page

@@ -3,41 +3,10 @@ set -e
 
 # =============================================================================
 # PHP-FPM Production Entrypoint
-# Handles Docker secrets, database readiness, and Laravel optimization
+# Handles database readiness and Laravel optimization
 # =============================================================================
 
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting PHP-FPM entrypoint..."
-
-# =============================================================================
-# LOAD DOCKER SECRETS
-# =============================================================================
-
-if [ -d "/run/secrets" ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loading Docker secrets..."
-
-    # Application key
-    if [ -f "/run/secrets/app_key" ]; then
-        export APP_KEY="$(cat /run/secrets/app_key)"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loaded APP_KEY from secret"
-    fi
-
-    # Database credentials
-    if [ -f "/run/secrets/db_username" ]; then
-        export DB_USERNAME="$(cat /run/secrets/db_username)"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loaded DB_USERNAME from secret"
-    fi
-
-    if [ -f "/run/secrets/db_password" ]; then
-        export DB_PASSWORD="$(cat /run/secrets/db_password)"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loaded DB_PASSWORD from secret"
-    fi
-
-    # Redis password
-    if [ -f "/run/secrets/redis_password" ]; then
-        export REDIS_PASSWORD="$(cat /run/secrets/redis_password)"
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Loaded REDIS_PASSWORD from secret"
-    fi
-fi
 
 # =============================================================================
 # WAIT FOR DATABASE
